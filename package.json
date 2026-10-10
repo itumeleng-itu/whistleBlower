@@ -2,13 +2,14 @@
   "name": "whistleblower",
   "version": "0.1.0",
   "private": true,
-  "description": "Anonymous whistleblowing PWA with per-login random session IDs",
+  "description": "Anonymous, end-to-end encrypted whistleblowing PWA",
   "type": "module",
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/server.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "keygen": "node scripts/keygen.js"
   }
 }

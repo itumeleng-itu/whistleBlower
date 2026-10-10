@@ -7,26 +7,38 @@ export function openDatabase(file) {
   const db = new DatabaseSync(file);
   db.exec(`
     PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
 
-    -- Only a hash of each session ID is stored, so a database leak does not
-    -- expose usable session IDs. Nothing here identifies a person.
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash   TEXT PRIMARY KEY,
-      expires_at   INTEGER NOT NULL,
-      report_count INTEGER NOT NULL DEFAULT 0
+    -- Everything a reporter writes is encrypted on their device; this table
+    -- holds only ciphertext. auth_hash is the SHA-256 of a value derived from
+    -- the case code, so the code itself is never known to the server.
+    -- Dates are stored without a time of day to make timing correlation harder.
+    CREATE TABLE IF NOT EXISTS cases (
+      id          INTEGER PRIMARY KEY,
+      auth_hash   TEXT NOT NULL UNIQUE,
+      wrapped_key TEXT NOT NULL,
+      report      TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'received',
+      created_on  TEXT NOT NULL,
+      updated_on  TEXT NOT NULL
     );
 
-    -- Reports are deliberately NOT linked to the session that created them,
-    -- and only the day of submission is recorded.
-    CREATE TABLE IF NOT EXISTS reports (
-      id            INTEGER PRIMARY KEY,
-      reference     TEXT NOT NULL UNIQUE,
-      company       TEXT NOT NULL,
-      category      TEXT NOT NULL,
-      description   TEXT NOT NULL,
-      location      TEXT,
-      incident_date TEXT,
-      submitted_on  TEXT NOT NULL
+    CREATE TABLE IF NOT EXISTS messages (
+      id         INTEGER PRIMARY KEY,
+      case_id    INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+      sender     TEXT NOT NULL CHECK (sender IN ('reporter', 'investigator')),
+      body       TEXT NOT NULL,
+      created_on TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS messages_case ON messages(case_id);
+
+    -- A fresh random session ID is issued on every login; only its hash is stored.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash   TEXT PRIMARY KEY,
+      role         TEXT NOT NULL CHECK (role IN ('reporter', 'investigator')),
+      case_id      INTEGER REFERENCES cases(id) ON DELETE CASCADE,
+      expires_at   INTEGER NOT NULL,
+      action_count INTEGER NOT NULL DEFAULT 0
     );
   `);
   return db;

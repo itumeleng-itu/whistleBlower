@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Whistleblower · Investigators</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/js/investigator.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <span class="brand">Whistleblower · Investigators</span>
+    <button id="logout" class="link" hidden>Log out</button>
+  </header>
+
+  <main class="wide">
+    <section id="view-login" class="card">
+      <h1>Investigator login</h1>
+      <p>Your private key stays on this device. It is used here to decrypt cases and is never uploaded.</p>
+      <form id="login-form" autocomplete="off" novalidate>
+        <label for="token">Investigator token</label>
+        <input id="token" type="password" required>
+        <label for="key-file">Private key file (investigator-private.jwk.json)</label>
+        <input id="key-file" type="file" accept=".json,application/json" required>
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Log in</button>
+      </form>
+    </section>
+
+    <section id="view-list" hidden>
+      <div class="card">
+        <div class="case-head">
+          <h1>Cases</h1>
+          <button id="reload" class="secondary inline">Refresh</button>
+        </div>
+        <p class="hint">Key fingerprint: <code id="fingerprint"></code></p>
+        <p id="list-error" class="error" role="alert" hidden></p>
+        <ul id="case-list" class="case-list"></ul>
+      </div>
+    </section>
+
+    <section id="view-case" hidden>
+      <div class="card">
+        <button id="back" class="link dark">← All cases</button>
+        <div class="case-head">
+          <h1 id="case-title"></h1>
+          <select id="case-status-select" aria-label="Case status"></select>
+        </div>
+        <dl id="case-report" class="report"></dl>
+      </div>
+      <div class="card">
+        <h2>Messages with the reporter</h2>
+        <ol id="case-thread" class="thread"></ol>
+        <form id="reply-form" novalidate>
+          <label for="reply">Message to reporter</label>
+          <textarea id="reply" rows="4" maxlength="5000" required></textarea>
+          <p id="case-error" class="error" role="alert" hidden></p>
+          <button type="submit" class="primary">Encrypt and send</button>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

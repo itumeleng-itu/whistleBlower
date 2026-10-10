@@ -14,43 +14,33 @@
 </head>
 <body>
   <header class="bar">
-    <span class="brand">Whistleblower</span>
-    <span id="session-badge" class="badge" hidden></span>
-    <button id="logout" class="link" hidden>Log out</button>
+    <a class="brand" href="/">Whistleblower</a>
+    <button id="logout" class="link" hidden>Close case</button>
   </header>
 
   <main>
-    <!-- Login -->
-    <section id="view-login" class="card">
-      <h1>Report wrongdoing, anonymously</h1>
-      <p>No account, no email, no name. Enter your access key to start a session.
-         Your key is checked on this device and is never sent to our servers.</p>
-      <form id="login-form" autocomplete="off" novalidate>
-        <label for="key-input">Access key</label>
-        <input id="key-input" name="key" spellcheck="false" autocapitalize="characters"
-               placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" maxlength="40" required>
-        <p id="login-error" class="error" role="alert" hidden></p>
-        <button type="submit" class="primary">Start anonymous session</button>
-      </form>
-      <hr>
-      <p>Don't have a key?</p>
-      <button id="new-key" class="secondary">Generate a new key</button>
-    </section>
-
-    <!-- New key -->
-    <section id="view-newkey" class="card" hidden>
-      <h1>Your access key</h1>
-      <p>This key was created on your device. We never see it and cannot recover it.
-         Write it down somewhere safe.</p>
-      <output id="generated-key" class="key"></output>
-      <label class="check"><input type="checkbox" id="saved-key"> I have saved my key</label>
-      <button id="use-key" class="primary" disabled>Continue</button>
+    <!-- Home -->
+    <section id="view-home" hidden>
+      <div class="card notice" role="note">
+        <h2>Before you start</h2>
+        <ul>
+          <li><strong>Don't use a work phone, laptop or network.</strong> Your employer may be able to see what you do on them.</li>
+          <li>If you face serious risk, use <strong>Tor Browser</strong> to hide your internet connection.</li>
+          <li>Leave out anything that points to you, such as your name, your role, or details only you would know.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h1>Report wrongdoing, anonymously</h1>
+        <p>No account, no email, no name. Your report is encrypted on this device before it is
+           sent, and only the investigators can read it.</p>
+        <button id="start-report" class="primary">Make a report</button>
+        <button id="open-case" class="secondary">Open an existing case</button>
+      </div>
     </section>
 
     <!-- Report form -->
     <section id="view-report" class="card" hidden>
-      <h1>File a report</h1>
-      <p class="hint">Avoid details that could identify you (your name, role, or things only you would know).</p>
+      <h1>Make a report</h1>
       <form id="report-form" novalidate>
         <label for="company">Company</label>
         <input id="company" name="company" maxlength="200" required>
@@ -58,14 +48,6 @@
         <label for="category">What kind of activity?</label>
         <select id="category" name="category" required>
           <option value="">Choose…</option>
-          <option value="fraud">Fraud</option>
-          <option value="corruption-bribery">Corruption / bribery</option>
-          <option value="health-safety">Health &amp; safety</option>
-          <option value="environmental">Environmental</option>
-          <option value="labour-violations">Labour violations</option>
-          <option value="harassment-discrimination">Harassment / discrimination</option>
-          <option value="data-privacy">Data privacy</option>
-          <option value="other">Other</option>
         </select>
 
         <label for="description">What happened?</label>
@@ -83,17 +65,56 @@
         </div>
 
         <p id="report-error" class="error" role="alert" hidden></p>
-        <button type="submit" class="primary">Submit report</button>
+        <button type="submit" class="primary">Encrypt and send</button>
+        <button type="button" class="secondary" data-go="home">Cancel</button>
+      </form>
+      <p class="hint">Investigator key fingerprint: <code id="fingerprint">loading…</code></p>
+    </section>
+
+    <!-- Case code (shown once) -->
+    <section id="view-code" class="card" hidden>
+      <h1>Report sent. Save your case code</h1>
+      <p>This code is the <strong>only</strong> way back to your report, to see its status and answer
+         the investigators' questions. We never see it and cannot recover it.</p>
+      <output id="case-code" class="key"></output>
+      <p class="hint">Write it on paper or keep it somewhere private. Don't store it on a work device.</p>
+      <label class="check"><input type="checkbox" id="saved-code"> I have saved my case code</label>
+      <button id="code-continue" class="primary" disabled>Open my case</button>
+    </section>
+
+    <!-- Case login -->
+    <section id="view-login" class="card" hidden>
+      <h1>Open an existing case</h1>
+      <form id="login-form" autocomplete="off" novalidate>
+        <label for="code-input">Case code</label>
+        <input id="code-input" spellcheck="false" autocapitalize="characters"
+               placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" maxlength="40" required>
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Open case</button>
+        <button type="button" class="secondary" data-go="home">Back</button>
       </form>
     </section>
 
-    <!-- Done -->
-    <section id="view-done" class="card" hidden>
-      <h1>Report submitted</h1>
-      <p>Thank you. Your report reference is:</p>
-      <output id="reference" class="key"></output>
-      <p class="hint">This reference is not linked to your key or session.</p>
-      <button id="another" class="secondary">File another report</button>
+    <!-- Case -->
+    <section id="view-case" hidden>
+      <div class="card">
+        <div class="case-head">
+          <h1>Your case</h1>
+          <span id="case-status" class="status"></span>
+        </div>
+        <dl id="case-report" class="report"></dl>
+      </div>
+      <div class="card">
+        <h2>Messages with investigators</h2>
+        <ol id="case-thread" class="thread"></ol>
+        <form id="reply-form" novalidate>
+          <label for="reply">Reply</label>
+          <textarea id="reply" rows="4" maxlength="5000" required></textarea>
+          <p id="reply-error" class="error" role="alert" hidden></p>
+          <button type="submit" class="primary">Encrypt and send</button>
+        </form>
+        <button id="refresh" class="secondary">Check for new messages</button>
+      </div>
     </section>
   </main>
 </body>

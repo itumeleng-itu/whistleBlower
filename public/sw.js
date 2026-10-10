@@ -1,7 +1,7 @@
 // Caches the app shell so the app installs and opens offline.
 // API traffic is never cached: reports and session IDs must not linger on the device.
-const CACHE = 'whistleblower-v1';
-const SHELL = ['/', '/index.html', '/styles.css', '/js/app.js', '/js/key.js', '/manifest.webmanifest', '/icons/icon.svg'];
+const CACHE = 'whistleblower-v2';
+const SHELL = ['/', '/index.html', '/styles.css', '/js/app.js', '/js/case-code.js', '/js/crypto.js', '/js/api.js', '/manifest.webmanifest', '/icons/icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

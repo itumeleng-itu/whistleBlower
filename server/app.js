@@ -1,24 +1,17 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 
 export const SESSION_TTL_MS = 30 * 60 * 1000;
-export const MAX_REPORTS_PER_SESSION = 5;
-const MAX_BODY_BYTES = 32 * 1024;
+export const MAX_MESSAGES_PER_SESSION = 20;
+export const STATUSES = ['received', 'in-review', 'needs-info', 'closed'];
+const MAX_BODY_BYTES = 64 * 1024;
 const MAX_NEW_SESSIONS_PER_MINUTE = 120;
+const MAX_NEW_CASES_PER_MINUTE = 30;
 
-export const CATEGORIES = [
-  'fraud',
-  'corruption-bribery',
-  'health-safety',
-  'environmental',
-  'labour-violations',
-  'harassment-discrimination',
-  'data-privacy',
-  'other',
-];
-
-const LIMITS = { company: 200, location: 200, description: 10000 };
+// Ciphertexts are base64url. Limits leave room for the encryption overhead.
+const B64U = /^[A-Za-z0-9_-]+$/;
+const LIMITS = { auth: 43, wrappedKey: 1024, report: 30_000, message: 12_000 };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -39,7 +32,7 @@ const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
 };
 
-const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+const sha256 = (value) => createHash('sha256').update(value).digest();
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -48,93 +41,211 @@ class HttpError extends Error {
   }
 }
 
-export function createApp({ db, publicDir, now = () => Date.now() }) {
-  const stmts = {
-    insertSession: db.prepare('INSERT INTO sessions (token_hash, expires_at) VALUES (?, ?)'),
-    getSession: db.prepare('SELECT report_count FROM sessions WHERE token_hash = ? AND expires_at > ?'),
-    deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
-    purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
-    countReport: db.prepare('UPDATE sessions SET report_count = report_count + 1 WHERE token_hash = ?'),
-    insertReport: db.prepare(`
-      INSERT INTO reports (reference, company, category, description, location, incident_date, submitted_on)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`),
-  };
-
-  // In-memory only; never persisted and not keyed by IP address.
+// Fixed-window counter held in memory only; never persisted, not keyed by IP.
+function createLimiter(maxPerMinute, now) {
   let windowStart = 0;
-  let sessionsThisWindow = 0;
-
-  function createSession() {
+  let count = 0;
+  return () => {
     const t = now();
     if (t - windowStart >= 60_000) {
       windowStart = t;
-      sessionsThisWindow = 0;
+      count = 0;
     }
-    if (++sessionsThisWindow > MAX_NEW_SESSIONS_PER_MINUTE) {
-      throw new HttpError(429, 'Too many requests, try again shortly');
-    }
-    stmts.purgeSessions.run(t);
-    const sessionId = randomBytes(32).toString('base64url');
-    const expiresAt = t + SESSION_TTL_MS;
-    stmts.insertSession.run(hashToken(sessionId), expiresAt);
-    return { sessionId, expiresAt };
-  }
+    if (++count > maxPerMinute) throw new HttpError(429, 'Too many requests, try again shortly');
+  };
+}
 
-  function requireSession(req) {
-    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '');
-    if (!match) throw new HttpError(401, 'Missing or malformed session');
-    const tokenHash = hashToken(match[1]);
-    const row = stmts.getSession.get(tokenHash, now());
-    if (!row) throw new HttpError(401, 'Session expired, please log in again');
-    return { tokenHash, reportCount: row.report_count };
-  }
+function requireCiphertext(value, field, maxLength, exactLength) {
+  const ok = typeof value === 'string' && B64U.test(value) &&
+    (exactLength ? value.length === exactLength : value.length <= maxLength);
+  if (!ok) throw new HttpError(400, `Invalid ${field}`);
+  return value;
+}
 
-  function validateReport(body) {
-    const str = (v) => (typeof v === 'string' ? v.trim() : '');
-    const report = {
-      company: str(body.company),
-      category: str(body.category),
-      description: str(body.description),
-      location: str(body.location) || null,
-      incidentDate: str(body.incidentDate) || null,
-    };
-    if (!report.company) throw new HttpError(400, 'Company is required');
-    if (!CATEGORIES.includes(report.category)) throw new HttpError(400, 'Invalid category');
-    if (report.description.length < 20) {
-      throw new HttpError(400, 'Description must be at least 20 characters');
-    }
-    for (const [field, max] of Object.entries(LIMITS)) {
-      if ((report[field] ?? '').length > max) {
-        throw new HttpError(400, `${field} must be at most ${max} characters`);
-      }
-    }
-    if (report.incidentDate) {
-      const d = /^\d{4}-\d{2}-\d{2}$/.test(report.incidentDate) && new Date(report.incidentDate);
-      if (!d || Number.isNaN(d.getTime()) || d.getTime() > now()) {
-        throw new HttpError(400, 'Invalid incident date');
-      }
-    }
-    return report;
-  }
+export function createApp({ db, publicDir, investigatorPublicKey, investigatorToken, now = () => Date.now() }) {
+  const today = () => new Date(now()).toISOString().slice(0, 10);
+  const investigatorTokenHash = investigatorToken ? sha256(investigatorToken) : null;
+  const limitSessions = createLimiter(MAX_NEW_SESSIONS_PER_MINUTE, now);
+  const limitCases = createLimiter(MAX_NEW_CASES_PER_MINUTE, now);
 
-  function submitReport(req, body) {
-    const session = requireSession(req);
-    if (session.reportCount >= MAX_REPORTS_PER_SESSION) {
-      throw new HttpError(429, 'Report limit reached for this session');
-    }
-    const r = validateReport(body);
-    const reference = 'WB-' + randomBytes(6).toString('hex').toUpperCase();
-    const submittedOn = new Date(now()).toISOString().slice(0, 10);
+  const stmts = {
+    insertCase: db.prepare(
+      'INSERT INTO cases (auth_hash, wrapped_key, report, created_on, updated_on) VALUES (?, ?, ?, ?, ?)'),
+    findCaseByAuth: db.prepare('SELECT id FROM cases WHERE auth_hash = ?'),
+    getCase: db.prepare('SELECT * FROM cases WHERE id = ?'),
+    listCases: db.prepare(`
+      SELECT c.id, c.status, c.created_on, c.updated_on, c.wrapped_key, c.report,
+        (SELECT sender FROM messages m WHERE m.case_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_sender
+      FROM cases c ORDER BY c.id DESC`),
+    setStatus: db.prepare('UPDATE cases SET status = ?, updated_on = ? WHERE id = ?'),
+    touchCase: db.prepare('UPDATE cases SET updated_on = ? WHERE id = ?'),
+    listMessages: db.prepare('SELECT sender, body, created_on FROM messages WHERE case_id = ? ORDER BY id'),
+    insertMessage: db.prepare('INSERT INTO messages (case_id, sender, body, created_on) VALUES (?, ?, ?, ?)'),
+    insertSession: db.prepare('INSERT INTO sessions (token_hash, role, case_id, expires_at) VALUES (?, ?, ?, ?)'),
+    getSession: db.prepare('SELECT role, case_id, action_count FROM sessions WHERE token_hash = ? AND expires_at > ?'),
+    countAction: db.prepare('UPDATE sessions SET action_count = action_count + 1 WHERE token_hash = ?'),
+    deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
+    purgeSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
+  };
+
+  function transaction(fn) {
     db.exec('BEGIN');
     try {
-      stmts.insertReport.run(reference, r.company, r.category, r.description, r.location, r.incidentDate, submittedOn);
-      stmts.countReport.run(session.tokenHash);
+      const result = fn();
       db.exec('COMMIT');
+      return result;
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
     }
-    return { reference };
+  }
+
+  function createSession(role, caseId = null) {
+    limitSessions();
+    stmts.purgeSessions.run(now());
+    const sessionId = randomBytes(32).toString('base64url');
+    const expiresAt = now() + SESSION_TTL_MS;
+    stmts.insertSession.run(sha256(sessionId).toString('hex'), role, caseId, expiresAt);
+    return { sessionId, expiresAt };
+  }
+
+  function requireSession(req, role) {
+    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '');
+    if (!match) throw new HttpError(401, 'Missing or malformed session');
+    const tokenHash = sha256(match[1]).toString('hex');
+    const row = stmts.getSession.get(tokenHash, now());
+    if (!row) throw new HttpError(401, 'Session expired, please log in again');
+    if (role && row.role !== role) throw new HttpError(403, 'Not allowed');
+    return { tokenHash, role: row.role, caseId: row.case_id, actionCount: row.action_count };
+  }
+
+  function caseView(caseId, { includeKey }) {
+    const c = stmts.getCase.get(caseId);
+    if (!c) throw new HttpError(404, 'Case not found');
+    return {
+      id: c.id,
+      status: c.status,
+      createdOn: c.created_on,
+      updatedOn: c.updated_on,
+      report: c.report,
+      ...(includeKey && { wrappedKey: c.wrapped_key }),
+      messages: stmts.listMessages.all(caseId).map((m) => ({ sender: m.sender, body: m.body, createdOn: m.created_on })),
+    };
+  }
+
+  function addMessage(caseId, sender, body) {
+    const message = requireCiphertext(body.message, 'message', LIMITS.message);
+    const c = stmts.getCase.get(caseId);
+    if (!c) throw new HttpError(404, 'Case not found');
+    if (c.status === 'closed') throw new HttpError(409, 'This case is closed');
+    transaction(() => {
+      stmts.insertMessage.run(caseId, sender, message, today());
+      stmts.touchCase.run(today(), caseId);
+    });
+  }
+
+  // --- Route handlers ------------------------------------------------------
+
+  function createCase(body) {
+    limitCases();
+    const auth = requireCiphertext(body.auth, 'auth', 0, LIMITS.auth);
+    const wrappedKey = requireCiphertext(body.wrappedKey, 'wrappedKey', LIMITS.wrappedKey);
+    const report = requireCiphertext(body.report, 'report', LIMITS.report);
+    const authHash = sha256(auth).toString('hex');
+    if (stmts.findCaseByAuth.get(authHash)) throw new HttpError(409, 'Case already exists');
+    stmts.insertCase.run(authHash, wrappedKey, report, today(), today());
+  }
+
+  function reporterLogin(body) {
+    const auth = requireCiphertext(body.auth, 'case code', 0, LIMITS.auth);
+    const c = stmts.findCaseByAuth.get(sha256(auth).toString('hex'));
+    if (!c) {
+      limitSessions(); // failed attempts count against the same budget
+      throw new HttpError(401, 'Case code not recognised');
+    }
+    return createSession('reporter', c.id);
+  }
+
+  function investigatorLogin(body) {
+    if (!investigatorTokenHash) throw new HttpError(503, 'Investigator access is not configured');
+    limitSessions();
+    const ok = typeof body.token === 'string' && timingSafeEqual(sha256(body.token), investigatorTokenHash);
+    if (!ok) throw new HttpError(401, 'Invalid investigator token');
+    return createSession('investigator');
+  }
+
+  function reporterMessage(req, body) {
+    const session = requireSession(req, 'reporter');
+    if (session.actionCount >= MAX_MESSAGES_PER_SESSION) {
+      throw new HttpError(429, 'Message limit reached for this session');
+    }
+    addMessage(session.caseId, 'reporter', body);
+    stmts.countAction.run(session.tokenHash);
+  }
+
+  function parseCaseId(raw) {
+    const id = Number(raw);
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(404, 'Case not found');
+    return id;
+  }
+
+  async function handleApi(req, res, path) {
+    res.setHeader('Cache-Control', 'no-store');
+    const route = `${req.method} ${path.replace(/\/\d+(?=\/|$)/, '/:id')}`;
+    const caseId = /\/(\d+)(?:\/|$)/.exec(path)?.[1];
+
+    switch (route) {
+      case 'GET /api/config':
+        if (!investigatorPublicKey) throw new HttpError(503, 'Reporting is not configured yet');
+        return sendJson(res, 200, { investigatorPublicKey });
+      case 'POST /api/cases':
+        createCase(await readJson(req));
+        return sendJson(res, 201, {});
+      case 'POST /api/session':
+        return sendJson(res, 201, reporterLogin(await readJson(req)));
+      case 'POST /api/investigator/session':
+        return sendJson(res, 201, investigatorLogin(await readJson(req)));
+      case 'DELETE /api/session': {
+        stmts.deleteSession.run(requireSession(req).tokenHash);
+        res.writeHead(204).end();
+        return;
+      }
+      case 'GET /api/case':
+        return sendJson(res, 200, caseView(requireSession(req, 'reporter').caseId, { includeKey: false }));
+      case 'POST /api/case/messages':
+        reporterMessage(req, await readJson(req));
+        return sendJson(res, 201, {});
+      case 'GET /api/investigator/cases':
+        requireSession(req, 'investigator');
+        return sendJson(res, 200, {
+          cases: stmts.listCases.all().map((c) => ({
+            id: c.id,
+            status: c.status,
+            createdOn: c.created_on,
+            updatedOn: c.updated_on,
+            wrappedKey: c.wrapped_key,
+            report: c.report,
+            awaitingReply: c.last_sender === 'reporter',
+          })),
+        });
+      case 'GET /api/investigator/cases/:id':
+        requireSession(req, 'investigator');
+        return sendJson(res, 200, caseView(parseCaseId(caseId), { includeKey: true }));
+      case 'POST /api/investigator/cases/:id/messages':
+        requireSession(req, 'investigator');
+        addMessage(parseCaseId(caseId), 'investigator', await readJson(req));
+        return sendJson(res, 201, {});
+      case 'PATCH /api/investigator/cases/:id': {
+        requireSession(req, 'investigator');
+        const { status } = await readJson(req);
+        if (!STATUSES.includes(status)) throw new HttpError(400, 'Invalid status');
+        const id = parseCaseId(caseId);
+        if (stmts.setStatus.run(status, today(), id).changes === 0) throw new HttpError(404, 'Case not found');
+        return sendJson(res, 200, { status });
+      }
+      default:
+        throw new HttpError(404, 'Not found');
+    }
   }
 
   async function readJson(req) {
@@ -155,28 +266,6 @@ export function createApp({ db, publicDir, now = () => Date.now() }) {
     } catch {
       throw new HttpError(400, 'Invalid JSON');
     }
-  }
-
-  async function handleApi(req, res, path) {
-    res.setHeader('Cache-Control', 'no-store');
-    if (path === '/api/session' && req.method === 'POST') {
-      // Called only after the access key was validated on the device.
-      // The request carries no body: the server never learns the key.
-      return sendJson(res, 201, createSession());
-    }
-    if (path === '/api/session' && req.method === 'DELETE') {
-      const { tokenHash } = requireSession(req);
-      stmts.deleteSession.run(tokenHash);
-      res.writeHead(204).end();
-      return;
-    }
-    if (path === '/api/categories' && req.method === 'GET') {
-      return sendJson(res, 200, { categories: CATEGORIES });
-    }
-    if (path === '/api/reports' && req.method === 'POST') {
-      return sendJson(res, 201, submitReport(req, await readJson(req)));
-    }
-    throw new HttpError(404, 'Not found');
   }
 
   async function serveStatic(req, res, path) {
