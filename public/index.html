@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="Report illegal activity at any company, anonymously.">
+  <title>Whistleblower</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <span class="brand">Whistleblower</span>
+    <span id="session-badge" class="badge" hidden></span>
+    <button id="logout" class="link" hidden>Log out</button>
+  </header>
+
+  <main>
+    <!-- Login -->
+    <section id="view-login" class="card">
+      <h1>Report wrongdoing, anonymously</h1>
+      <p>No account, no email, no name. Enter your access key to start a session.
+         Your key is checked on this device and is never sent to our servers.</p>
+      <form id="login-form" autocomplete="off" novalidate>
+        <label for="key-input">Access key</label>
+        <input id="key-input" name="key" spellcheck="false" autocapitalize="characters"
+               placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" maxlength="40" required>
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Start anonymous session</button>
+      </form>
+      <hr>
+      <p>Don't have a key?</p>
+      <button id="new-key" class="secondary">Generate a new key</button>
+    </section>
+
+    <!-- New key -->
+    <section id="view-newkey" class="card" hidden>
+      <h1>Your access key</h1>
+      <p>This key was created on your device. We never see it and cannot recover it.
+         Write it down somewhere safe.</p>
+      <output id="generated-key" class="key"></output>
+      <label class="check"><input type="checkbox" id="saved-key"> I have saved my key</label>
+      <button id="use-key" class="primary" disabled>Continue</button>
+    </section>
+
+    <!-- Report form -->
+    <section id="view-report" class="card" hidden>
+      <h1>File a report</h1>
+      <p class="hint">Avoid details that could identify you (your name, role, or things only you would know).</p>
+      <form id="report-form" novalidate>
+        <label for="company">Company</label>
+        <input id="company" name="company" maxlength="200" required>
+
+        <label for="category">What kind of activity?</label>
+        <select id="category" name="category" required>
+          <option value="">Choose…</option>
+          <option value="fraud">Fraud</option>
+          <option value="corruption-bribery">Corruption / bribery</option>
+          <option value="health-safety">Health &amp; safety</option>
+          <option value="environmental">Environmental</option>
+          <option value="labour-violations">Labour violations</option>
+          <option value="harassment-discrimination">Harassment / discrimination</option>
+          <option value="data-privacy">Data privacy</option>
+          <option value="other">Other</option>
+        </select>
+
+        <label for="description">What happened?</label>
+        <textarea id="description" name="description" rows="8" minlength="20" maxlength="10000" required></textarea>
+
+        <div class="row">
+          <div>
+            <label for="incidentDate">When (optional)</label>
+            <input id="incidentDate" name="incidentDate" type="date">
+          </div>
+          <div>
+            <label for="location">Where (optional)</label>
+            <input id="location" name="location" maxlength="200">
+          </div>
+        </div>
+
+        <p id="report-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Submit report</button>
+      </form>
+    </section>
+
+    <!-- Done -->
+    <section id="view-done" class="card" hidden>
+      <h1>Report submitted</h1>
+      <p>Thank you. Your report reference is:</p>
+      <output id="reference" class="key"></output>
+      <p class="hint">This reference is not linked to your key or session.</p>
+      <button id="another" class="secondary">File another report</button>
+    </section>
+  </main>
+</body>
+</html>
